@@ -1,0 +1,600 @@
+---
+title: "Gene Expression in Heart Failure"
+author: "Ane Kleiven, project group 12"
+date: "2024-11-02"
+output:
+  html_document:
+    code_folding: hide
+  pdf_document: default
+---
+
+<H2>
+
+Abstract
+
+<H2/>
+
+Heart failure (HF) can manifest in several forms. including heart failure with preserved ejection fraction (HFpEF) and heart failure with reduced ejection fraction (HFrEF).
+
+This study aims to investigate RNA sequencing data from healthy individuals and those with HF, to understand how gene expression differs among these groups.
+
+The data set was normalized using variance stabilizing transformation (VST) and scaling. Clustering, module construction and Gene Ontology (GO) enrichment analyses was performed to look for significant patterns. Central genes andf their associated biological function were explored.
+
+The results revealed distinct clustering of the sample groups, reflecting different gene expression among the groups. Biological processes such as oxidative phosphorylation, ATP synthesis and aerobic respiration were significantly different between the groups.
+
+<H2>
+
+Introduction
+
+<H2/>
+
+Heart failure (HF) is a complex disease that can manifest i several forms. Heart failure is often categorized into two main types: heart failure with preserved ejection fraction (HFpEF) and heart failure with reduced ejection fraction (HFpEF) (1).
+
+The aim of this study is to explore the data set from the research paper "Myocardial Gene Expression Signatures in Human Heart Failure With Preserved Ejection Fraction" (1), using unsupervised learning.
+
+The analysis involvels data normalization, Principal component analysis(PCA), hierarchical clustering, and heatmapping, followed by network analysis and module detection. Identified modules will be further investigated using Gene Ontology (GO) enrichment analysis. Many of these methods were also performed in the referenced research mentioned above.
+
+<H2>
+
+Methods
+
+<H2/>
+
+RNA sequencing data were obtained from the research paper "Myocardial Gene Expression Signatures in Human Heart Failure With Preserved Ejection Fraction"(1). The data set includes samples from healthy individuals and individuals with heart failure, taken from the left and right ventricle.
+
+<H4>
+
+**Data Preprocessing and Normalization**
+
+</H4>
+
+The data files containing count data were downloaded from Zenodo (2) and read into R using the function read_tsv in the library readr. The two data files were merged together and converted into a data matrix.
+
+```{r message=FALSE, warning=FALSE}
+library(readr)
+reads_LVS <- read_tsv("Reads left heart ventricle.txt")
+reads_RVS <- read_tsv("Reads right ventricle side .txt")
+```
+
+```{r, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(dplyr)
+reads_LVS <- reads_LVS %>% rename(ensembl_id = ...1)
+reads_RVS <- reads_RVS %>% rename(ensembl_id = ...1)
+
+# join the count data to one table 
+reads <- reads_LVS %>% left_join(reads_RVS, by = "ensembl_id")
+reads <- column_to_rownames(reads, var = "ensembl_id")
+
+# convert the count data to a data matrix 
+reads_matrix <- reads %>% data.matrix()
+
+```
+
+Some of the red blood cell (RBC) genes were filtered out, to account for blood contamination (1). The file containing RBC genes were also downloaded from Zenodo (2). Genes with a mean read below 50 was removed from the data matrix, to reduce the complexity of the data set.
+
+```{r, message=FALSE, warning=FALSE}
+library(matrixStats)
+library(readr)
+
+# exclude the genes with a mean read below 50 reads
+filtered_matrix <- reads_matrix[rowMeans(reads_matrix) >= 50, ]
+
+RBC_genes <- read_tsv("Exclude RBC genes.txt")
+RBC_genes <- column_to_rownames(RBC_genes, var = "Ensembl")
+
+# exclude the RBC genes (account for blood contamination)
+exclude_RBC <- rownames(RBC_genes)
+
+filtered_RBC <- filtered_matrix[!(rownames(filtered_matrix) %in% exclude_RBC), ]
+
+#the filtered matrix 
+filtered_matrix <- filtered_RBC
+
+```
+
+Three samples were removed from the data set. These samples were found to be outliers in the research paper (1).
+
+```{r, message=FALSE, warning=FALSE}
+filtered_matrix <- filtered_matrix[, !colnames(filtered_matrix) %in% c("7709", "7715", "7546")]
+```
+
+The data matrix was normalized using variance stabilizing transformation (VST). The function varianceStabilizingTransformation in the DESeq2 package was used. The VST normalized matrix was scaled using the scale function.
+
+```{r, message=FALSE, warning=FALSE}
+library(dplyr)
+
+# vst normalization of the data 
+vst <- DESeq2::varianceStabilizingTransformation(filtered_matrix)
+
+# scale the data
+vst_scaled <- scale(vst)
+```
+
+<h4>
+
+**Principal Component Analysis**
+
+<h4/>
+
+Principal Component analysis (PCA) was done using the prcomp function. The scaled VST matrix was used. The principal components 1 and 2 (PC1 and PC2), accounting for most of the variance, was plotted using ggplot in the ggplot2 package. The principal components was also plotted into a second plot, with sample numbers instead of colored points.
+
+<H4>
+
+**Hierarchical Clustering**
+
+<h4/>
+
+Hierarchical clustering was performed using the dendextend package. The scaled VST matrix was used. The data was transposed to get the samples as rows and genes as columns. Euclidian distance with the dist() function was used as distance metric. The data was clustered into three clusters using the function hclust. The dendrogram was made with the as.dendrogram function.
+
+<H4>
+
+**Heatmap of the scaled VST normalized data**
+
+<h4/>
+
+A heatmap of the scaled and VST normalized data was generated using the pheatmap package. The samples were annotated by group (normal, HFrEF and HFpEF), to define the annotation column.
+
+Euclidian distance and Ward's method were applied for hierarchical clustering of the columns, while Pearson correlation and Ward's method were used for clustering the rows.
+
+The heatmap was created using the pheatmap function.
+
+<H4>
+
+**Constructing Modules**
+
+<h4/>
+
+Before constructing modules, different power values was tested using the pickSoftThreshold function from the WGCNA package. The code for this analysis was adapted from a YouTube tutorial by bioinformatician Khushbu Patel (3). Based on the results, the soft-thresholding power was set to 8. Evaluation of different power values is presented in Figure 1.
+
+Modules were constructed using the blockwiseModules function in WGCNA. The minModuleSize parameter was set to 50 genes, and the minCutheight parameter was set to 0.15. Multiple parameter values were tested in advance to determine the settings.
+
+The distribution of genes per module was visualized using the ggplot function in R.
+
+The within and between module correlation were calculated. The code for this analysis was adapted from Computer Lab 6 in the course BIN315 and modified to suit the data set.
+
+```{r, message=FALSE, warning=FALSE, fig.cap= "Figure 1: choosing the power for constructing modules. The upper part of the diagram shows the power in terms of the signed R^2. The lower part of the diagram shows the power in terms of the mean k"}
+
+library(ggplot2)
+library(gridExtra)
+library(WGCNA)
+
+power <- c(c(1:12))
+
+sft <- pickSoftThreshold(vst, powerVector = power, networkType = "unsigned")
+
+sft.data <- sft$fitIndices
+
+a1 <- ggplot(sft.data, aes(Power, SFT.R.sq, label = Power)) + 
+  geom_point() + 
+  geom_text(nudge_y = 0.1) + 
+  labs(x = "Power", y = "Model fit, signed R^2") + 
+  theme_classic()
+
+
+a2 <- ggplot(sft.data, aes(Power, mean.k., label = Power)) +
+  geom_point() + 
+  geom_text(nudge_y = 0.1) + 
+  labs(x = "Power", y = "Model fit, mean.k.") + 
+  theme_classic()
+
+
+grid.arrange(a1,a2,nrow = 2)
+```
+
+<H4>
+
+**Module Eigengene Significance**
+
+<h4/>
+
+Module eigengene significance was calculated by comparing the normal group with the heart failure groups.
+
+P-values were obtained by performing t-tests on the module eigengenes (MEs). To account for multiple testing, adjusted p-values were calculated using the False Discovery Rate (FDR) method. Module eigengene significance was quantified as the -log10 of the adjusted p-values.
+
+The values were saved into a new table, MEsig.tbl. The significance of each module was visualized using the ggplot2 package.
+
+<H4>
+
+**Exploring the dark green module**
+
+<H4/>
+
+The genes in the dark green module were analyzed. These genes were extracted into a new data frame, along with their corresponding human gene symbol and module eigengene.
+
+<h4>
+
+**Gene Ontology Enrichment Analysis**
+
+<h4/>
+
+Gene Ontology (GO) enrichment analysis was conducted on the genes in the dark green module, using the enrichGO function from the clusterProfiler package available in Bioconductor.
+
+<H4>
+
+**Artificial intelligence**
+
+<H4/>
+
+Artificial intelligence (AI) by Chat GPT has been used in parts of the task, to help with errors during coding (4).
+
+<H2>
+
+Results
+
+<H2/>
+
+This section presents and visualizes the results obtained using the described methods.
+
+<h4>
+
+**Principal Component Analysis**
+
+<h4/>
+
+The principal component analysis (PCA) indicates that the data naturally separates into three distinct groups. When the disease labels are added to the points in the plot, most samples cluster correctly within their respective groups. However, a few samples cluster incorrectly, positioned between the HFpEF and HFrEF clusters.
+
+In the second PCA plot, PC1 and PC2 are visualized with the sample numbers. The y- and x-axes show that the two first principle components explain 19% and 14% of the variation in the data.
+
+```{r message=FALSE, warning=FALSE}
+# perform PCA 
+PCA <- prcomp(t(vst_scaled), center = TRUE, scale. = FALSE)
+
+```
+
+```{r, message=FALSE, warning=FALSE, fig.cap= "Figure 2: PCA of scaled VST normalized count data, showing the two first principal components, PC1 and PC2. The data is clustered into three groups. The colour of the points represents the disease group."}
+
+library(ggplot2)
+
+# read the all samples table into R: 
+all_samples <- read_tsv("samples all patients.txt")
+
+# separate the column into three new columns
+allsamples <- all_samples %>% separate(`samplenames,"disease","tissue"`, into = c("sample names", "disease", "tissue"), sep = ",")
+
+# plot the PCA data (PC1,PC2) and color the points based on disease status in allsamples 
+
+PCA_res <- as.data.frame(PCA$x) 
+PCA_res$sample_names <- row.names(PCA_res)
+
+PCA_plot <- ggplot(PCA_res, aes(x = PC1, y = PC2)) +
+  geom_point(aes(color = allsamples$disease[match(sample_names, allsamples$`sample names`)]), size = 2) +
+  labs(title = "PCA plot", x = "PC1", y = "PC2") +
+  theme_minimal() +
+  scale_color_brewer(palette = "Set1") + labs(color = "disease")  # Adjust color palette as needed
+
+print(PCA_plot)
+
+```
+
+```{r, message=FALSE, warning = FALSE, fig.cap= "Figure 3: PCA of scaled VST normalized count data, showing the sample numbers as points. The variation for each component is shown on the x- and y-axis."}
+pca.dat <- PCA$x
+pca.var <- PCA$sdev^2 
+pca.var.percent <- round(pca.var/sum(pca.var)*100, digits = 2)
+
+pca.dat <- as.data.frame(pca.dat)
+
+ggplot(pca.dat, aes(PC1,PC2)) + 
+  geom_point() + 
+  geom_text(label = rownames(pca.dat)) + 
+  labs(title = "PCA plot", x = paste0("PC1: ", pca.var.percent[1], " %"),
+       y = paste0("PC2: ", pca.var.percent[2], " %"))
+```
+
+<H4>
+
+**Hierarchical Clustering**
+
+<h4/>
+
+The samples were hierachical clustered into three distinct groups. Most samples appear to fit well within their group. However, two samples, 7734 (HFpEF) and 7504 (HFrEF), located on the left side of the blue cluster, seem to differ from the others, as they are clustered into their own branch on the tree.
+
+When comparing the dendrogram with the allsamples table (showing sample number and diagnoses), most of the samples are clustered into the correct group.
+
+```{r, message=FALSE, warning=FALSE, fig.cap= "Figure 4: Hierarchical Clustering of VST normalized count data"}
+
+library(dplyr)
+library(dendextend)
+
+# cluster the data and make dendrogram 
+heart.tree <- vst_scaled %>% t() %>% dist() %>% hclust %>% as.dendrogram() %>% reorder(1:149, agglo.FUN = mean) %>% as.hclust() %>% as.dendrogram()
+
+# set the number of clusters to three and colour the branches 
+heart.tree <- heart.tree %>% set("branches_k_color", k = 3, value = c("palevioletred2", "royalblue1", "darkolivegreen3")) %>% set("leaves_cex", 0.1) %>% set("labels_cex", 0.4)
+
+# decorate the plot 
+plot(heart.tree, main = "Hierarchical Clustering", xlab = "Samples", ylab = "Cluster distance")
+
+```
+
+<H4>
+
+**Heatmap of the VST normalized data**
+
+<H4/>
+
+The heatmap below illustrates the clustering of samples and genes into different groups. The colour patterns reveal differential expression of genes across disease groups.
+
+The upper cluster of genes shows higher expression in the normal samples, compared to the disease groups. The lower cluster of genes is more highly expressed in the disease groups, than in the normal group.
+
+As observed in the PCA-plot, some samples were incorrectly clustered. This is clear looking at the annotation column, where samples from the HFrEF group (coral) are clustered with the HFpEF group (green).
+
+```{r, message=FALSE, warning=FALSE, fig.cap= "Figure 5: Heatmap of the scaled VST normalized count data. The samples are clustered into three groups. The annotation column shows the disease state. High gene expression is coloured in red. Lower expression is coloured in blue."}
+# load heatmap package
+library(pheatmap)
+
+# define the annotation column 
+annot_col <- data.frame(Disease = allsamples$disease[match(colnames(vst_scaled), allsamples$`sample names`)])
+rownames(annot_col) <- colnames(vst_scaled)
+
+# apply distance and clustering method to the columns
+heart.treeC <- vst_scaled %>% t() %>% dist(method = "euclidian") %>% hclust("ward.D") %>% as.dendrogram() %>% reorder(1:153, agglo.FUN = mean) %>% as.hclust()  
+
+
+# apply distance and clustering method to the rows 
+heart.treeR <- as.dist(1-cor(t(vst_scaled), method = "pearson")) %>% hclust("ward.D")
+
+# make heatmap using pheatmap function.
+pheatmap(vst_scaled, 
+         cluster_rows = heart.treeR,
+         cluster_cols = heart.treeC, 
+         scale = "row",
+         fontsize_row = 1, 
+         show_rownames = FALSE, 
+         show_colnames = FALSE,
+         annotation_col = annot_col,
+         cutree_rows = 4,
+         cutree_cols = 3,
+         color = colorRampPalette(c("cornflowerblue","white", "brown1"))(100), breaks = seq(-2, 2,         length.out = 101), main = "Heatmap of the normalized data")
+
+```
+
+<H4>
+
+**Constructing modules**
+
+<h4/>
+
+The output from the blockwiseModules function identified 25 modules, with module sized ranging from 80 to 5787 genes. The largest module, the grey module, contains all genes that did not fit into any other modules.
+
+The second largest module, turqouise, contains 1355 genes, followed by the blue and brown modules. The distribution of genes across the modules is visualized in Figure 6 below.
+
+```{r,message=FALSE, warning=FALSE, fig.cap= "Figure 6: Number of genes per module. The grey module represents the unassigned genes"}
+# load packages 
+library(WGCNA)
+library(tidyverse)
+
+heart_modules <- blockwiseModules(datExpr = t(vst), 
+                                  power = 8, 
+                                  minModuleSize = 50, 
+                                  minCutHeight = 0.15)
+
+# visualize number of genes per module
+mod.tbl <- tibble(Genes = names(heart_modules$colors),Modules = unname(heart_modules$colors)) %>% group_by(Modules) %>% arrange(Modules) %>% summarise(count = n())
+
+mod.tbl %>% ggplot(aes(x = Modules, y = count, fill = Modules)) + geom_col(col="black") +
+scale_fill_manual(values=mod.tbl$Modules) + theme_bw() + theme(axis.text.x=element_text(angle=90, hjust=1, vjust = 0.5),legend.position="none") + ggtitle("Constructed Modules")
+
+
+```
+
+Table 1: Distribution of genes in the 25 modules. 
+
+```{r, message=FALSE, warning=FALSE}
+
+# table showing the number of genes in each module 
+
+pander::pander(table(heart_modules$colors))
+
+```
+Figure 7 shows the distribution of correlations within each module. To create a more evenly scaled plot, the grey module was excluded from this analysis. The group on the right shows a strong positive correlation with their respective module eigengene, while the group on the left to their module eigengene. The group on the left displays a negative correlation.
+
+```{r, message=FALSE, warning=FALSE, fig.cap= "Figure 7: Within module correlation. The grey module containing the unassigned genes is excluded from the figure"}
+# Compute correlation between all genes and all module eigengenes
+kME <- cor(t(vst), heart_modules$MEs)
+
+# Correlation within modules
+kME %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = "Genes") %>% 
+  pivot_longer(cols = -Genes, names_to = "Modules.correlation", values_to = "Correlation") %>% 
+  left_join(tibble(Genes = names(heart_modules$colors),
+       Modules.member = unname(heart_modules$colors))) %>% 
+  mutate(Modules.correlation = gsub("ME", "", Modules.correlation)) %>% 
+  filter(Modules.correlation == Modules.member) %>% 
+  filter(Modules.member != "grey") %>% 
+  ggplot(aes(x = Correlation)) +
+  geom_histogram() +
+  ggtitle("Correlations with Module Eigengenes (within)") +
+  theme_bw()
+```
+
+Figure 8 shows the between-module correlation of module eigengenes, and how the modules relate to each other. A significant portion of the data exhibits very low or no correlation between modules, indicating that these modules most likely represent different biological processes. On the other hand, some modules show a correlation near 1. These may be functionally related.
+
+```{r, message=FALSE, warning=FALSE, fig.cap= "Figure 8: Between module correlation of the module eigengenes"}
+# Correlation between the eigengenes of all modules
+MEs_cor_B <- cor(heart_modules$MEs, heart_modules$MEs)
+MEs_cor_B[lower.tri(MEs_cor_B, diag = TRUE)] <- NA
+
+# Correlation between modules
+MEs_cor_B %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = "Module1") %>% 
+  pivot_longer(cols = -Module1, names_to = "Module2", values_to = "Correlation") %>% 
+  drop_na(Correlation) %>% 
+  filter(Module1 != Module2) %>% 
+  filter(Module2 != "MEgrey") %>% 
+  ggplot(aes(x = Correlation)) +
+  geom_histogram() +
+  xlim(-1, 1) +
+  ggtitle("Correlations of Module Eigengenes (between)") +
+  theme_bw()
+```
+
+<h4>
+
+**Module eigengene significance**
+
+<h4/>
+
+The results from the module eigengene significance, show that the dark green module has the highest module eigengene significance, followed by the light cyan, red and royal blue modules.
+
+Table 2: p-values, adjusted p-values and module eigengene significance for the different modules
+
+```{r, message=FALSE, warning=FALSE}
+library(ggplot2)
+library(dplyr)
+
+# Initialize vectors to store p-values
+MEpval <- c() 
+
+for (i in 1:ncol(heart_modules$MEs)) {
+  normal <- allsamples$disease == "\"Normal\""
+
+
+  # Perform pairwise t-tests (Normal vs HFrEF, Normal vs HFpEF)
+  t_test <- t.test(heart_modules$MEs[normal, i], heart_modules$MEs[!normal, i])
+
+  
+  # Store the p-values for each comparison
+  MEpval[i] <- t_test$p.value
+
+}
+
+# Table with module names, p-values, adjusted p-values, 
+# scaled "significance" by computing -log10(adjusted p-values)
+MEsig.tbl <- tibble(Modules = colnames(heart_modules$MEs),
+                    MEpval = MEpval,
+                    MEpval.adj = p.adjust(MEpval, method="fdr"),
+                    MEsignificance = -log10(MEpval.adj)) %>% arrange(Modules)
+
+# View the table
+pander::pander(head(MEsig.tbl,26))
+
+```
+
+```{r, message=FALSE, warning=FALSE, fig.cap= "Figure 9: Module Eigengene Significance for the different modules. The dark green module has the highest significance, followed by the lightcyan, red and royalblue"}
+# Plot significance for each module
+MEsign <- ggplot(MEsig.tbl, aes(x = Modules, y = MEsignificance, fill = Modules)) +
+  geom_col(col="black") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dotted") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+        legend.position = "none") +
+  ylab("Module eigengene significance") +
+  ggtitle("Module Eigengene Significance") + scale_fill_grey()
+plot(MEsign)
+
+```
+
+<h4>
+
+**Exploring the dark green module**
+
+<h4/>
+
+The dark green module, found to have the highest module eigengene significance, contains 86 genes. The module eigengene significance for the genes in this module ranges from 0.97 to -0.87. The majority of genes (53 out of 86) are positively correlated. The 10 most highly correlated genes in the black module are showed in the table below.
+
+```{r, message=FALSE,warning=FALSE}
+library(readr)
+
+# read in the human gene symbols 
+
+human_genes <- read_tsv("Human_ensembl_ids_to_symbols.txt")
+```
+
+```{r,message=FALSE,warning=FALSE}
+moduleColors <- heart_modules$colors 
+darkgreen_genes <- rownames(vst)[moduleColors == "darkgreen"]
+darkgreen_matrix <- vst[darkgreen_genes, , drop = FALSE]
+darkgreen_df <- as.data.frame(darkgreen_genes)
+```
+
+```{r,message=FALSE,warning=FALSE}
+
+ME_correlation <- cor(t(vst), heart_modules$MEs) %>% as.data.frame %>%  rownames_to_column(var = "ensembl_id")
+  
+ME_darkgreen_cor <- ME_correlation %>% dplyr::select(ensembl_id, MEdarkgreen)
+
+```
+
+Table 3: The genes with the highest module eigengene significance in the dark green module 
+```{r,message=FALSE,warning=FALSE}
+library(knitr)
+
+darkgreen_symbols <- data.frame(ensembl_id = darkgreen_genes) %>% left_join(human_genes, by = "ensembl_id")
+
+darkgreen_symbols <- left_join(darkgreen_symbols, ME_darkgreen_cor, by = "ensembl_id") 
+
+darkgreen_symbols <- darkgreen_symbols %>% arrange(desc(MEdarkgreen))
+
+pander::pander(head(darkgreen_symbols,10))
+```
+
+<H4>
+
+**Gene Ontology Enrichment Analysis**
+
+<H4/>
+
+To explore the biological process associated with the genes in the dark green module, GO enrichment analysis was conducted. The most significantfindings from the analysis indicated that the dark green module contains genes involved in oxidative phosphorylation, aerobic respiration, ATP biosynthetic process, purine ribonucleoside triphosphate biosynthetic process, purine nucleoside triphosphate biosynthetic process and ribonucleoside triphosphate biosynthetic process.
+
+Table 4: GO enrichment analysis. Biological processes associated with the genes in the dark green module 
+
+```{r, message=FALSE, warning=FALSE}
+
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("clusterProfiler")
+
+library(clusterProfiler)
+library(org.Hs.eg.db)
+
+enrichment_results <- enrichGO(gene = darkgreen_symbols$gene_symbol, OrgDb = org.Hs.eg.db, 
+  keyType = "SYMBOL",
+  ont = "BP",  # Biological Process
+  pAdjustMethod = "fdr",
+  qvalueCutoff = 0.05)
+
+library(pander) 
+
+pander(head(enrichment_results@result["Description"]))
+```
+
+<H2>
+
+Discussion
+
+<H2/>
+
+In the clustering analyses, including PCA, hierarchical clustering and heatmapping, the three patient groups naturally formed three distinct clusters. This suggest clear differences in gene expression between the different patient groups. The normal samples clustered more distinctly than the heart disease samples. This may be due to similarities between the two heart disease groups.
+
+When constructing the modules, a power value of 8 was chosen. However, the R squared values did not reach the expected threshold. No power value was found to be optimal for the analysis. Given more time, the choice of power could have been further investigate to improve the analysis.
+
+The results from blockwideModules gave 25 different modules. The majority of genes were assigned to the grey module, suggesting that these genes didn't fit any of the regular modules. This may be due to the data set not being fully optimized for this type of analysis. Another reason can be the parameters chosen in the blockwiseModules.
+
+From the module eigengenes, the dark green module was found to be the most significant. This indicates that the expressions levels in this module differ significantly between normal and heart disease groups.
+
+The GO enrichment analysis revealed that the genes in the dark green module are involved in processes such as oxidative phosphorylation, ATP synthesis, aerobic respiration and purine metabolism. The research paper referenced for this project also identified differences in gene expression related to oxidative phosphorylation and ATP synthesis. In the article these genes were found to be upregulated in HFpEF samples (1). These changes in heart patients, may be linked to oxidative stress and inflammation when dealing with heart disease. The body is likely to compensate in different ways when the heart isn't functioning the way it should.
+
+Given the scope of this project, many interesting topics and analyses were left out. There are several interesting things to look into for further analysis.
+
+First, the module eigengene significance in this report focuses on the differences between the normal group and the two heart disease groups combined. It would be valuable to examine these differences separately for the HFrEF group and the HFpEF group. Comparing the two heart failures could also provide new insights.
+
+Although the dark green module was most significant, other modules such as light cyan, red and royal blue also showed high module eigengene significance. For further analysis, the light cyan, red and royal blue module should be explored and GO enrichment analysis should be performed on these modules as well.
+
+In conclution, this study found significant differences between the three groups. Processes such as oxidative phosphorylation, ATP synthesis and aerobic respiration were identified as notably different between normal samples and those from individuals with heart failure.
+
+<H2>
+
+References
+
+<H2/>
+
+1.  Hahn VS, Knutsdottir H, Luo X, Bedi K, Margulies KB, Haldar SM, et al. Myocardial gene expression signatures in human heart failure with preserved ejection fraction. *Circulation*. 2021;143(12):1206-19. <doi:10.1161/CIRCULATIONAHA.120.050498>.
+
+2.  Hildur Knutsdottir. baderzone/HFpEF_2020. Zenodo; 2020.
+
+3.  Khushbu Patel. Weighted Gene Co-expression Network Analysis (WGCNA) Step-by-step Tutorial - Part 1. *YouTube; 2022.* Available from: <https://www.youtube.com/watch?v=gYE59uEMXT4&t=40s>
+
+4.  OpenAI. ChatGPT [Internet]. Available from: <https://chat.openai.com>. Accessed on 21.11.2024.

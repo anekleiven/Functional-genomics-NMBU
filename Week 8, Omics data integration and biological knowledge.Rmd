@@ -1,0 +1,244 @@
+---
+title: "Week 8, Omics data integration and biological knowledge"
+author: "Ane Kleiven"
+date: "2024-10-24"
+output: html_document
+---
+
+<h2> Answers to questions <h2/> 
+
+**1. A biomedical researcher gives you both metabolomics data and clinical data (weight, cholesterol, blood pressure, etc) for a number of individuals. You also know which of them are sick and healthy. You want to find out what determines if a patient is sick or healthy. How would you analyze the data? Write at most 250 words.**
+
+
+I would put the metabolomics data together with the clinical data for all individuals. 
+The data would have to be divided into a training set and one test set. 
+
+To analyze the data, I would use machine learning and random forest. 
+Random forest works by making many decision trees from different subsets of data. 
+The algorithms are then improved through training, and the goal is to find which features that are important for the sick and healthy. 
+
+After training, the model can be tested on the test set (which is unseen data). 
+
+I would have to bear in mind that a method like this is pruned to overfitting. 
+The number of metabolites can exseed the number of samples. 
+Overfitting means that the model no longer predicts which sample comes from sick and healthy, the model instead memorizes. 
+
+
+
+**2. A famous plant biologist study wood formation in trees. He has done a GWAS study in a population of 1000 trees and identified a number of SNPs associated with increased biomass production. He has also measured gene expression in the population and identified eQTLs; many of which coincide with GWAS SNPs. However, none of these SNPs are located inside genes and many are not even located near genes. The biologist now comes to you.  He wants to construct a regulatory network to better understand biomass production in trees. What experiments would you propose and how would you analyze the data? Write at most 500 words.**
+
+The biologist want's to use data integration. He already have some results from two different studies: 
+
+GWAS study is the study where you find positions in the genome, that correlate with a specific phenotype -  here biomass production. 
+eQTLs is the study where you find positions in the genome that correlate with the expression in some gene. 
+
+The biologist wants to find regulatory networks to understand biomass production in trees. He knows that some of the identified eQTLs coincide with GWAS SNPs. 
+
+The unknown factor in the biologist’s case is which transcription factor (TF) binds to which eQTLs. To find this, he could have used ChipSEQ, but since the TF is unknown, it would take a lot of experiments to find the right antibody to the unknown TFs. 
+
+A possible method for the biologist is phylogenetic footprinting. Phylogenetic footprinting is a technique where you compare conserved non-coding sequences across different species, to find the TFs regulating biomass production. 
+
+It would be smart to use ATAC-seq data for the phylogenetic footprinting, since the TFs are in open chromatin regions – regulatory regions. 
+
+
+Once the TFs and regulatory regions are linked to the SNPs, the biologist can find co-expressed modules using the expression data. 
+
+In the end the biologist can make regulatory networks – showing the relationship between TFs, SNPs and target genes – and how they all affect biomass production.  
+
+This data integration can reveal new insights about biomass production. 
+
+
+<h2> Getting the data <h2/> 
+
+<h3> Gene expression data <h3/> 
+
+```{r, message=FALSE, warning=FALSE, show_col_types = FALSE}
+library(tidyverse)
+
+worm_data <- read_tsv("worm_gene.txt", locale = locale(decimal_mark = ",")) %>% column_to_rownames(var = "Gene")
+worm_matrix <- as.matrix(worm_data[ ,-c(1:9)])
+
+```
+
+
+<h3> Chip-Seq data <H3/> 
+
+```{r,warning=FALSE, message=FALSE}
+gene.tf <- read_tsv("ce_gene_tf.txt")
+head(gene.tf)
+```
+
+
+<H2> Module finding <H2/> 
+
+```{r, warning=FALSE, message=FALSE}
+library(WGCNA) 
+
+# Get modules of gene clusters like we did in lab 6 
+
+modules <- blockwiseModules(datExpr = t(worm_matrix), numericLabels = TRUE)
+
+save(modules, file = "worm_gene_modules.RData")
+
+# Get all the (unique) module labels 
+
+module.labels <- unique(modules$colors)
+```
+
+<h3> Questions <h3/>
+
+**1. How many modules do you find?** 
+
+There are 100 different modules - 443 genes were not assigned to any module ("module 0")
+
+**2. How many genes are in each module? Make a plot (see code from lab 6).** 
+
+The plot is shown below. 
+The module containing most genes is module 1 (2184 genes) 
+The module containing the fewest genes is module 100 (33 genes) 
+
+
+```{r, message=FALSE, warning=FALSE}
+# Number of genes per module
+
+modules.tbl <- tibble(genes = rownames(worm_matrix), modules = unname(modules$colors)) %>%
+group_by(modules) %>% summarise(count = n()) %>% arrange(modules)
+
+modules.tbl %>% 
+  ggplot(aes(x = factor(modules), y = count, fill = factor(modules))) +
+  geom_col(col="black") +  
+  scale_color_brewer() +  theme_classic() + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 4),
+  legend.position = "none") + ggtitle("Number of Genes per Module") + xlab("Modules") + ylab("Counts")
+
+```
+
+<h2> Binding site enrichment <h2/> 
+
+
+```{r, warning=FALSE, message=FALSE}
+
+# This will be the data frame where we will store all the results (starts off empty/NULL)
+enrichment_res <- NULL
+
+# Get the total number of genes in the data matrix (total number of balls)
+n.genes <- nrow(worm_matrix)
+
+# For each module...
+for (module in module.labels) {
+  
+  # Get genes in the module
+  module.genes <- rownames(worm_matrix)[modules$colors == module]
+  
+  # Get number of genes in the module (the number of balls drawn)
+  k <- length(module.genes)
+  
+  # For each TF...
+  for (tf in unique(gene.tf$tf)) {
+    
+    # Get number of unique genes that have this TF (the number of white balls)
+    m <- length(unique(gene.tf$gene[gene.tf$tf == tf]))
+    
+    # Get the number of genes that don't have the TF (the number of black balls)
+    n <- n.genes - m
+    
+    # Get number of unique genes in the cluster that have this TF (the number of white balls drawn)
+    q <- length(unique(gene.tf$gene[gene.tf$tf == tf & gene.tf$gene %in% module.genes]))
+    
+    # Hypergeometric test checking for over-representation of TF binding
+    p <- phyper(q, m, n, k, lower.tail = FALSE)
+    
+    # Add the test results to the data frame
+    enrichment_res = rbind(enrichment_res, data.frame(module = module, tf = tf, q, m, n, k, p))
+  }
+}
+
+```
+
+
+<h3> Correction for multiple testing <h3/> 
+
+```{r, warning=FALSE,message=FALSE}
+# add a column with p-adjusted values in the enrichment table 
+
+enrichment_res$p.adj <- p.adjust(enrichment_res$p, method = "fdr")
+
+head(enrichment_res)
+```
+
+
+<H2> Questions <h2/> 
+
+
+**1. What is the most over-represented transcription factor binding site for each module?** 
+
+The table below shows the most over-represented transcription factor binding site for each module (the one with the lowest adjusted p-value). 
+
+```{r, message=FALSE, warning=FALSE}
+library(dplyr)
+
+# Extract most over-represented TF for each module
+most_overrepresented <- enrichment_res %>% group_by(module) %>% slice_min(p.adj, n = 1) %>% ungroup()
+
+most_overrepresented
+```
+
+**2. How many modules have at least one over-represented transcription factor binding site (padj < 0.05)?** 
+
+70 modules have at least one over-represented transcription factor binding site, with p.adjusted value < 0.05. 
+
+
+```{r, warning=FALSE, message=FALSE}
+library(dplyr)
+
+# Extract transcription factor binding sites with p.adj < 0.05
+overrepresented <- most_overrepresented %>% filter(p.adj < 0.05)
+
+overrepresented
+
+```
+
+
+**3. Are there weakly over-represented transcription factor binding sites (use p-value < 0.05, not corrected p-value < 0.05) that only appear upstream of one single gene? Explain how this could happen. Would you trust such results (explain)? Are any of them significant after correcting for multiple hypotheses?**
+
+There are 13 weakly over-represented transcription factor binding sites which only contains one gene. Ten of these are significant after correcting for multiple hypotheses. 
+Such results could possibly happen due to very specific binding sites, that regulate a very small number of genes. The results could also happen by chance. Since this is a very large data set, some results may statistically happen by chance. 
+
+Even if such results could be true positives, they should be treated with caution. Further investigation is needed. 
+
+The 13 TFBS were found using the code below. 
+
+```{r, warning=FALSE, message=FALSE}
+library(dplyr)
+
+one_overrepresented <- most_overrepresented %>% filter(q == 1, p < 0.05)
+
+one_overrepresented
+```
+
+**4. P-values are one thing, but we are often interested in effect sizes. E.g. the log 2 fold change in differentially expressed genes. Find the modules with at least one over-represented transcription factor binding site (padj < 0.05) that in addition appears upstream of at least three times as many genes in the module as one would expect by chance.**
+
+There are 27 modules with significant adjusted p-value that appears upstream of at least three times as many genes in the module, expected by chance. 
+This means that the q-value is three times bigger than the expected count. 
+
+```{r, warning=FALSE, message=FALSE}
+effect_size <- overrepresented %>% mutate(expected_count = (m * k) / n, 
+meets_criteria = q >= 3 * expected_count)
+
+true_effect <- effect_size %>% filter(meets_criteria == TRUE)
+
+true_effect
+
+```
+
+
+**5.Can you find two cases were the effect sizes are very similar but the p-values are very different. How could this have happened?**
+
+For the TF-binding sites NHR-2 (module 3 in the table above) and F16B12.6 (module 14), the effect sizes are pretty similar, but the p-values are different. 
+
+This can be due to the different k- and m-value for the two TFBS (664 and 360). These two are important when calculating the correct p-value and performing statistics on the data, thus differences will influence the p-value. 
+
+
+**6. How can the results in enrichment_res be represented as a regulatory networks? What would be the nodes? What would the edges/links represent?**
+
+The results in enrichment_res can be represented as regulatory networks with TFBS as nodes, linking to different target genes. 

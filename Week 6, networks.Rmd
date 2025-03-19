@@ -1,0 +1,432 @@
+---
+title: "Week 6, networks"
+author: "Ane Kleiven"
+date: "2024-10-10"
+output: html_document
+---
+
+<H2> Answers to questions <H2/>
+
+**1. Given unlimited computational resources, how would you infer a Bayesian network from a gene expression table? Explain. Write at most 250 words.**
+
+Normally, the challenge in this task would be the enormous number of networks. Since I have unlimited computational resources, I don’t have to worry about this. I can just test all possible networks.  
+To infer a Bayesian network from a gene expression table, you would have to find the posterior probability for all possible networks. After looking at all networks, you would look at the probability and choose the network with the highest probability. 
+If I didn’t have unlimited computational resources, I would randomly start somewhere in the landscape of networks and move upwards to the highest probability. To ensure that there are no other networks with higher probability, I would have to repeat this process in other parts of the landscape – until the network with the highest probability is found. 
+
+
+**2. A plant biologist is worried about how rising CO2 levels affect wheat production, and has therefore studied grain development at two different CO2 levels; A and B. He generated two transcriptomics datasets where gene expression is quantified across samples taken from multiple tissues and at different times using RNA-Seq. He then used these two datasets to infer two co-expression networks that describe expression similarities in conditions A and B, respectively. Looking at the networks he realizes that these are gigantic hairballs with thousands of nodes connected by millions of links. Hence it is not easy to identify the differences in co-expression between condition A and B. The biologist therefore comes to you. How would you analyze the data? Describe the method you would use and what type of results you would get by applying this method. Write at most 250 words.**
+
+The dataset is very complex, because the samples are from different tissues and at different times. The method that should be used is differential co-expression. 
+Here the biologist must find the conserved co-expression genes (equal in both levels), specific co-expression genes (specific for one of the levels and differentiated co-expression genes (opposite co-expression in the two levels). 
+The biologist can now make a list of the specific co-expression genes and the differentiated co-expression genes and identify genes important for CO2-levels. 
+After grouping the different genes, he can make a network where the nodes and links are colored by group. 
+The network will show different hubs, where for example some genes are differentially expressed with many other genes. The biologist can then go further into these hubs of genes and find genes or groups of genes that are important for CO2-levels. 
+The goal is to find differences in relationships between genes. 
+
+
+<h2> Installing WGCNA <h3/> 
+
+```{r, message=FALSE, warning=FALSE, eval = FALSE}
+# Install dependency packages for WGCNA from bioconductor
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install("impute")
+BiocManager::install("GO.db")
+BiocManager::install("preprocessCore")
+
+# Install WGCNA
+install.packages("WGCNA")
+```
+
+```{r, message=FALSE, warning=FALSE}
+library(WGCNA)
+library(tidyverse)
+```
+
+
+<h2> WGCNA on autism data <h2/> 
+
+
+<h3> The Data <H3/>
+
+```{r}
+load(file = "autism_expression.RData")
+
+```
+
+
+<H3> Identify modules <h4/> 
+
+```{r}
+cortex.norm.t <- t(cortex.norm)  # transpose the expression matrix to get samples in rows and genes in columns
+modules <- blockwiseModules(datExpr = cortex.norm.t, power = 10, minModuleSize = 40, minAbsSplitHeight = 0.1)
+```
+
+**Study the help and explain what these parameters do:** 
+
+Power = 10: The power controls how strict the network distinguishes between strong and weak correlations. The power is a threshold for the correlation. One would often choose a power that results in a scale-free network. A scale-free network means that all nodes have approximately the same number of connections (k), where as some are highly connected (called hubs). 
+
+minModuleSize = 40: sets the minimum number of modules to 40 
+
+networkType = "unsigned": in an unsigned network, you are only interested in whether genes are co-expressed or not. You don't take the correlations direction into consideration. In a signed network, the nodes will have links showing the direction of the correlation. 
+
+
+
+<H3> Explore modules <H3/>
+
+
+**How do you get the module eigengenes (MEs) and how many are there?**
+
+The code to find the MEs are shown below. The MEs can be seen as the average expression of all genes in the given module. There are one ME-value for all modules and all samples. For example: module one have 58 MEs, since there are 58 samples. There are 23*58 MEs all together. 
+
+
+```{r}
+str(modules)
+
+
+MEs <- moduleEigengenes(cortex.norm.t, colors = modules$colors)$eigengenes
+head(MEs)
+```
+
+**Can you print the eigengene vector for the “magenta” ME?**
+
+The results are shown in the code below. 
+
+```{r}
+print(MEs$MEmagenta)
+```
+<H4> Number of genes per module <H4/>
+
+
+```{r}
+# Number of genes per module
+modules.tbl <- tibble(Genes = names(modules$colors),
+       Modules = unname(modules$colors)) %>% 
+  group_by(Modules) %>% 
+  arrange(Modules) %>% 
+  summarise(count = n())
+
+modules.tbl %>% 
+  ggplot(aes(x = Modules, y = count, fill = Modules)) +
+  geom_col(col="black") +
+  scale_fill_manual(values=modules.tbl$Modules) +
+  theme_bw() +
+  theme(axis.text.x=element_text(angle=90, hjust=1, vjust = 0.5),
+        legend.position="none") +
+  ggtitle("Number of genes per module")
+```
+
+<H4> Within module correlation <h4/> 
+
+```{r}
+# Compute correlation between all genes and all module eigengenes
+kME <- cor(cortex.norm.t, modules$MEs)
+
+# Correlation within modules
+kME %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = "Genes") %>% 
+  pivot_longer(cols = -Genes, names_to = "Modules.correlation", values_to = "Correlation") %>% 
+  left_join(tibble(Genes = names(modules$colors),
+       Modules.member = unname(modules$colors))) %>% 
+  mutate(Modules.correlation = gsub("ME", "", Modules.correlation)) %>% 
+  filter(Modules.correlation == Modules.member) %>% 
+  filter(Modules.member != "grey") %>% 
+  ggplot(aes(x = Correlation)) +
+  geom_histogram() +
+  ggtitle("Correlations with module eigengene (within module correlation)") +
+  theme_bw()
+```
+
+<h4> Between module correlation <h4/>
+
+
+```{r, warning=FALSE, message=FALSE}
+# Correlation between the eigengenes of all modules
+MEs_R <- cor(modules$MEs, modules$MEs)
+MEs_R[lower.tri(MEs_R, diag = TRUE)] <- NA
+
+# Correlation between modules
+MEs_R %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = "Module1") %>% 
+  pivot_longer(cols = -Module1, names_to = "Module2", values_to = "Correlation") %>% 
+  drop_na(Correlation) %>% 
+  filter(Module1 != Module2) %>% 
+  filter(Module2 != "MEgrey") %>% 
+  ggplot(aes(x = Correlation)) +
+  geom_histogram() +
+  xlim(-1, 1) +
+  ggtitle("Correlations of module eigengenes (between module correlation)") +
+  theme_bw()
+```
+
+**Explain what you see in the three plot. Relate it to the parameter settings explained earlier, if possible.**
+
+
+The first plot shows the number of genes counted in each module. Here the grey module has the most counts, this is where all the unassigned genes are placed. Here you can see the number of modules, chosen to be <40. 
+
+The second plot shows how the correlation within each module is distributed. Here the genes from the grey module is removed, which makes a more evenly scaled plot. High correlation indicates that the genes are strongly correlated to their module eigengene. Low correlation indicates that the genes are less related to their modules and the biological process they represent. 
+Using an unsigned network can lead to higher correlations among genes within the same module (since the links don't have any direction).This may explain the high peaks closer to 1 in this plot
+
+
+The third plot shows the distribution of correlation between module eigengenes.The x-axis shows the correlation scale, and the y-axis shows the number of pairvise correlations that fall into the same correlation. Since there are several peaks with equal correlation, this indicates that there are module eigengenes that are highly correlated with each other. 
+High correlations (close to 1) imply that certain modules are closely related and might be involved in similar biological processes.
+Negative correlations (close to -1) indicate that the modules represents opposing biological processes.
+Choosing a high power in the between module correlation, could lead to a plot with few modules with high correlations. 
+A lower power could lead to the oppsite: many modules with low correlation. 
+
+
+
+**Try removing the exception for the grey-module in the second plot (within module correlation). Explain what you see when correlations from the grey module are included.**
+
+When including the grey module, you get many more genes with correlation ~1. This means that these genes don't fit the module they are assigned to. Since we know that the grey module is the module where all the unassigned genes are, this makes very good sense. They were put there in the absence of something better. 
+
+
+```{r, message=FALSE,warning=FALSE}
+
+# Correlation within modules
+#including the grey module 
+
+kME %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = "Genes") %>% 
+  pivot_longer(cols = -Genes, names_to = "Modules.correlation", values_to = "Correlation") %>% 
+  left_join(tibble(Genes = names(modules$colors),
+       Modules.member = unname(modules$colors))) %>% 
+  mutate(Modules.correlation = gsub("ME", "", Modules.correlation)) %>% 
+  filter(Modules.correlation == Modules.member) %>% 
+  ggplot(aes(x = Correlation)) +
+  geom_histogram() +
+  ggtitle("Correlations with module eigengene (within module correlation)") +
+  theme_bw()
+```
+
+<h3> Module eigengene significance <h3/> 
+
+```{r}
+library(ggplot2)
+
+# For each module eigengene (ME), run a t.test between autism and control samples 
+# and save the pvalue
+MEpval <- c() 
+for (i in 1:ncol(modules$MEs)) {MEpval[i] <- t.test(modules$MEs[hasAutism, i], modules$MEs[!hasAutism, i])$p.value}
+
+# Table with module names, p-values, adjusted p-values, 
+# scaled "significance" by computing -log10(adjusted p-values)
+MEsig.tbl <- tibble(Modules = colnames(modules$MEs),
+       MEpval = MEpval,
+       MEpval.adj = p.adjust(MEpval, method="fdr"),
+       MEsignificance = -log10(MEpval.adj)) %>% 
+  arrange(Modules)
+
+# Plot significance for each module
+MEsig.tbl %>% 
+  ggplot(aes(x = Modules, y = MEsignificance, fill = Modules)) +
+  geom_col(col="black") +
+  geom_hline(yintercept = -log10(0.05), linetype = "dotted") +
+  scale_fill_manual(values=modules.tbl$Modules) +
+  theme_bw() +
+  theme(axis.text.x=element_text(angle=90, hjust=1, vjust = 0.5),
+        legend.position="none") +
+  ylab("Module eigengene significance")
+
+```
+
+**Which five modules have the highest significance for correlation with the autism disease state? What are the p-values?**
+
+The five modules with the highest significance is listed below. These are the modules with the lowest p-values and adjusted p-values.
+The adjusted p-values are necessary when multiple hypotheses are tested, to draw reliable conclusion. These values are made from more strict criteria. 
+
+MEblack: p-value = 9.755289e-05, adjusted p-value = 0.001121858
+
+MEdarkgreen: p-value = 1.623613e-04, adjusted p-value = 0.001197339
+
+MElightyellow: p-value = 2.602428e-04, adjusted p-value = 0.001197339
+
+MEpurple: p-value = 2.602911e-04, adjusted p-value = 0.001197339
+
+MEtan: p-value = 8.870895e-05, adjusted p-value = 0.001121858
+
+
+
+**Below we have plotted the “expression” of the eigengene of the first significant module (MEblack). Reproduce this plot for each of the five most significant modules and compare the results with figure 2-A in the article.**
+
+
+
+
+
+```{r, include=FALSE}
+orderedSampleNames <- c(
+  "A_AN11989_T", "A_AN11989_F", "A_AN12457_T", "A_AN12457_F", "A_AN16115_F", "A_AN16641_T", "A_AN16641_F",
+  "A_AN17138_T", "A_AN17138_F", "A_AN17254_F", "A_AN17777_T", "A_AN17777_F", "A_AN19511_T", "A_AN19511_F",
+  "A_AN01570_T", "A_AN01570_F", "A_AN06420_T", "A_AN06420_F", "A_AN08166_T", "A_AN08166_F", "A_AN08792_T",
+  "A_AN08792_F", "A_AN08873_T", "A_AN08873_F", "A_AN09730_T", "A_AN09730_F", "A_AN00493_F", "A_AN00764_T",
+  "A_AN00764_F", "C_AN10028_T", "C_AN10028_F", "C_AN10833_T", "C_AN10833_F", "C_AN12137_F", "C_AN12240_T",
+  "C_AN12240_F", "C_AN14757_T", "C_AN14757_F", "C_AN15566_T", "C_AN15566_F", "C_AN17425_T", "C_AN17425_F",
+  "C_AN19442_T", "C_AN19442_F", "C_AN19760_T", "C_AN19760_F", "C_AN01125_T", "C_AN01125_F", "C_AN01410_F",
+  "C_AN03217_F", "C_AN04479_T", "C_AN04479_F", "C_AN07176_T", "C_AN07176_F", "C_AN00142_T", "C_AN00142_F",
+  "C_AN00544_T", "C_AN00544_F")
+```
+
+```{r}
+library(ggplot2)
+library(dplyr)
+
+# plot for MEblack
+
+MEs %>% as.data.frame() %>% mutate(orderedSampleNames = factor(orderedSampleNames, levels = orderedSampleNames[order(hasAutism, decreasing  = TRUE)])) %>% ggplot(aes(x = orderedSampleNames, y = MEblack, fill = hasAutism)) + geom_col(col="black") + geom_bar(stat = "identity") + theme_classic() + labs(title = "Module eigengene, MEblack", x = "Samples", y = "MEblack") + theme(axis.text.x = element_blank(),  axis.ticks.x = element_blank()) + scale_fill_manual(values = c("pink","coral"))
+```
+```{r}
+# plot for MEdarkgreen
+
+MEs %>% as.data.frame() %>% mutate(orderedSampleNames = factor(orderedSampleNames, levels = orderedSampleNames[order(hasAutism, decreasing  = TRUE)])) %>% ggplot(aes(x = orderedSampleNames, y = MEdarkgreen, fill = hasAutism)) + geom_col(col="black") + geom_bar(stat = "identity") + theme_classic() + labs(title = "Module eigengene, MEdarkgreen", x = "Samples", y = "MEdarkgreen") + theme(axis.text.x = element_blank(),  axis.ticks.x = element_blank()) + scale_fill_manual(values = c("pink","coral"))
+```
+```{r}
+# plot for MElightyellow
+
+MEs %>% as.data.frame() %>% mutate(orderedSampleNames = factor(orderedSampleNames, levels = orderedSampleNames[order(hasAutism, decreasing  = TRUE)])) %>% ggplot(aes(x = orderedSampleNames, y = MElightyellow, fill = hasAutism)) + geom_col(col="black") + geom_bar(stat = "identity") + theme_classic() + labs(title = "Module eigengene, MElightyellow", x = "Samples", y = "MElightyellow") + theme(axis.text.x = element_blank(),  axis.ticks.x = element_blank()) + scale_fill_manual(values = c("pink","coral"))
+```
+
+```{r}
+# plot for MEpurple
+
+MEs %>% as.data.frame() %>% mutate(orderedSampleNames = factor(orderedSampleNames, levels = orderedSampleNames[order(hasAutism, decreasing  = TRUE)])) %>% ggplot(aes(x = orderedSampleNames, y = MEpurple, fill = hasAutism)) + geom_col(col="black") + geom_bar(stat = "identity") + theme_classic() + labs(title = "Module eigengene, MEpurple", x = "Samples", y = "MEpurple") + theme(axis.text.x = element_blank(),  axis.ticks.x = element_blank()) + scale_fill_manual(values = c("pink","coral"))
+```
+
+```{r}
+#plot for MEtan
+
+MEs %>% as.data.frame() %>% mutate(orderedSampleNames = factor(orderedSampleNames, levels = orderedSampleNames[order(hasAutism, decreasing  = TRUE)])) %>% ggplot(aes(x = orderedSampleNames, y = MEtan, fill = hasAutism)) + geom_col(col="black") + geom_bar(stat = "identity") + theme_classic() + labs(title = "Module eigengene, MEtan", x = "Samples", y = "MEtan") + theme(axis.text.x = element_blank(),  axis.ticks.x = element_blank()) + scale_fill_manual(values = c("pink","coral"))
+```
+
+**Which module is most similar to the M12 module (figure 2-A)?** 
+
+Module MEpurple is the most similar to the M12 module in the paper. 
+
+
+<H3> Module Membership <h3/>
+
+```{r}
+# Measure module membership by calculating the correlation between genes and module eigengenes
+kME <- cor(cortex.norm.t, modules$MEs) %>% 
+  as.data.frame()
+```
+
+```{r}
+central_genes <- as.data.frame(kME$MEpurple, gene.symbols)
+central_genes_sorted <- central_genes %>% arrange(desc(kME$MEpurple)) 
+head(central_genes_sorted,10)
+```
+**Do you recognize any of the genes from figure 2-B of Voineagu in your results? Note that the gene A2BP1 is also known as RBFOX1.**
+
+All these genes were also included in the network from module 12 in the article: 
+CNTNAP1, CHRM1, APBA2, AP3B2, ABCG4, A2BP1 = RBFOX1
+
+
+
+<h3> Autism susceptibility gene enrichment in modules <h3/> 
+
+
+```{r, warning=FALSE, message=FALSE}
+ASDtbl <- read_tsv("supDataASDgenes.txt")
+```
+
+**Describe the four parameters in terms of autism susceptibility genes and module genes.** 
+
+x = the number of autism susceptibility genes that are also found in the module. 
+
+m = the number of autism susceptibility genes. 
+
+n = the number of non-autism susceptibility genes. 
+
+k = the number of genes both autism susceptibility and non-autism susceptibility - total number of genes in the module. 
+
+
+```{r}
+# Get the unique gene names present in the cortex data
+genesCortex <- gene.symbols %>% unique() %>% na.omit()
+
+# Get autism susceptibility genes that are also present in the cortex data (using %in% to compare lists)
+genesASD <- ASDtbl$Gene[ASDtbl$Gene %in% genesCortex]
+
+m <- length(genesASD) # number of ASD genes
+n <- length(genesCortex) - m # number of non-ASD genes
+
+p.values <- c()
+for (i in 1:ncol(kME)) {
+  
+  module <- colnames(kME)[i]
+  
+  module.cor <- data.frame(Correlation = kME[, module],
+                           gene = gene.symbols) %>% 
+    drop_na(gene) %>% 
+    group_by(gene) %>% 
+    summarise(Correlation = mean(Correlation)) %>% 
+    filter(Correlation > 0.7)
+  
+  # How many genes in module, above the cutoff score
+  k <- module.cor %>% nrow()
+  
+  # How many ASD genes in module, above the cutoff score
+  x <- module.cor %>% filter(gene %in% genesASD) %>% nrow()
+  
+  # The probability of having at least that many ASD genes in the module by chance (hyper-geometric test)
+  p.values[i] <- phyper(x - 1, m, n, k, lower.tail = FALSE)
+  
+}
+
+tibble(Modules = colnames(kME),
+       Pval = p.values,
+       Pval.adj = p.adjust(Pval, method="fdr"),
+       ) %>% 
+  arrange(Pval.adj)
+```
+
+**Which modules do you find have a significant over-representation of autism susceptibility genes? Does this fit with what they found in the paper?** 
+
+The following modules have a significant over-representation of autism susceptibility genes: 
+MEpurple
+MEtan 
+MEmidnightblue
+
+MEpurple which I found to be similar to M12 in the article, was one of the modules with over-representation of autism susceptibility genes. M12 showed significant overrepresentation of known autism susceptibility genes. 
+
+When looking at the most central genes in the MEtan-module, two of the 10 top genes are also included in the M12-module - found to be significant for autism susceptibility genes. (MAP2K5 and ABLIM2)
+
+None of the 10 central genes for MEmidnightblue were mentioned in the networks from the article. 
+
+
+```{r}
+central_genes_tan <- as.data.frame(kME$MEtan, gene.symbols)
+central_genes_sorted_tan <- central_genes_tan %>% arrange(desc(kME$MEtan)) 
+head(central_genes_sorted_tan,10)
+```
+
+```{r}
+central_genes_midnightblue <- as.data.frame(kME$MEmidnightblue, gene.symbols)
+central_genes_sorted_midnightblue <- central_genes_midnightblue %>% arrange(desc(kME$MEmidnightblue)) 
+head(central_genes_sorted_midnightblue,10)
+```
+
+**Try to explain how the network analysis was able to do what the differential expression analysis was not able to do.**
+
+Differential expression is a more straight forward method, where you look at changes in expression between different conditions in single genes. 
+The data in the article is quite complex. The data doesn't just contain genes and gene expression. The data is sampled from different parts of the brain. 
+When doing differential expression, you can't say anything about the relationship between the genes, their interactions and the groups they are clustered in. Differential expression may miss genes that are not highly or lowly expressed, but is involved with other central genes. 
+Network analysis makes it possible to see patterns and links between genes, how different genes interact with each other. Co-expression analysis can find modules of genes that work together in different biological processes. 
+In the case of the autism project, differential expression can find which genes that are highly or lowly expressed in controls and diseased, but the method can't say anything about which genes interact or are connected to each other. For that we need the network analysis. 
+
+
+
+
+
+
+
+
+
+
+
+
+
+

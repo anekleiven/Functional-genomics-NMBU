@@ -1,0 +1,411 @@
+---
+title: "Week 3, differential expression"
+author: "Ane Kleiven"
+date: "2024-09-19"
+output: html_document
+---
+
+<H3> Answers to questions <H3/>
+
+**1. What is the general idea behind variance adjustment methods when testing for differential expression? Explain the method and why it is acceptable to use adjustment.**
+
+The idea in variance adjustment is to remove the technical variance between the replicates by adjusting the variance towards the mean variance. Some genes may have high biological variance, but the technical variance should be the same. 
+When testing for differential expressions, one would often use few replicates. These replicates often have quite high variance which will affect the statistical significance of the differential expression. By stabilizing the variance across different samples, you make statistical comparisons more significant and reliable. 
+In variance adjustment, you make the variances more similar by moving the individual variances towards the mean variance. The method used for doing this is T-test. Either as a simple T-test, or as linear regression. When doing the T-test, you will get a p-value which tells you whether the data is statistically significant or not. The p-value is affected by the variance. High variance will give a higher p-value. 
+
+**2. Describe the main differences between finding differentially expressed genes from microarray data and RNA-Seq data.**
+
+The microarray data are based on normally distributed data (continuous distribution), while the RNA-seq data are based on counts data. 
+Counts data follows a discrete distribution, of the Poisson. 
+Poisson distribution is shown to underestimate variance in highly expresses genes, therefore you often use negative binomial distribution for finding differentially expressed genes in count data. 
+In normally distributed data you use the T-test to find the DEGs. 
+The different statistical tests used for the different data types, have shown that the negative binomial tests give higher power for highly expressed genes. Normally distributed data doesn’t have this property. The normally distributed data are much more depending on the number of replicates when finding differentially expressed genes. They show a huge difference in results between 2 and 3 replicates (Limma). 
+In the negative binomial methods (DESeq and EDGEr) detected almost all DEGs with both 5% of all the reads and 100% of all the reads. 
+
+**3. What is (1) function enrichment analysis and (2) gene set enrichment analysis? Explain each method first and then discuss similarities and differences.**
+
+Function enrichment analysis looks at genes and gene function. The idea is that you use a controlled vocabulary (gene ontology terms) and see what genes in your list of DEGs are linked to one of these terms in the vocabulary. 
+For example: is the term blood coagulation enriched in the DEGs. 
+
+In gene set enrichment analysis, you want to find out what genes are enriched at the top of the list of all genes sorted by DE. You have two conditions, phenotype A and B. You sort all the genes after how DE they are. You use a gene set and see what genes (for example genes in blood coaculation) are overrepresented (enriched) in the two conditions. You walk from the top of the list of DE and down. 
+In the function enrichment analysis, you have a list of significant DEGs, while in the gene set enrichment analysis you sort the genes after how DE they are – but they don’t need to be significantly DEGs. No need for any individual gene to be DE. Look at DE as a group. In both analyses you can find about gene function. 
+
+
+```{r,message=FALSE, include=FALSE}
+
+#Single gene example data
+
+library(dplyr)
+library(ggplot2)
+
+# Generate 10 random numbers around a mean of 8 for control and 10 for disease, with standard deviation of 1
+exprControl <- rnorm(10, mean=8, sd=1)
+exprDisease <- rnorm(10, mean=10, sd=1)
+
+# Join the two vectors of numbers together
+expr <- c(exprControl, exprDisease)
+
+# Repeat "control" 10 times and "disease" 10 times (we need to know which data are from control and disease)
+condition <- rep(factor(c("control","disease")), each=10)
+
+#Now lets visualize the data (the two dotted lines show the mean values for each condition):
+
+tibble(Expression = expr, Phenotype = condition) %>% 
+  ggplot(aes(x = Phenotype, y = Expression, col = Phenotype)) +
+  geom_boxplot() +
+  geom_jitter(size = 2, alpha = 0.5, width = 0.25) +
+  scale_color_manual(values=c("lightblue4", "coral")) +
+  theme_bw() 
+
+```
+
+
+```{r,message=FALSE, include=FALSE}
+
+#T-test
+
+# T-test between disease data and control data
+t.test(exprDisease, exprControl,  var.equal=T)
+
+#The p-value < 0.05 statistically significant at 5% significance level. 
+```
+
+
+```{r,message=FALSE, include=FALSE}
+# Fold change difference in mean expression levels
+FC <- mean(exprDisease) / mean(exprControl)
+FC
+#The mean of the gene expression in the disease group is higher than in the control group. 
+```
+
+
+```{r,message=FALSE, include=FALSE}
+# Fold change difference in mean expression levels
+log2FC <- log2(FC)
+log2FC
+#The log2 FC is positive: the gene expression in the disease group is higher than in the control group. 
+```
+
+
+```{r, message=FALSE, include=FALSE}
+
+#Linear models 
+
+fit <- lm(expr ~ condition)
+summary(fit)
+#We are interested in the slope (conditiondisease) which will tell us if there is change in expression between controls and diseased - the difference in means between the two groups. P-value shows the significance. 
+#Intercept = the mean of the control samples 
+```
+
+
+```{r, include=FALSE}
+#In the summary of the fitted model we can see that there are two coefficients (named (Intercept) and conditiondisease). We can recognize several of the numbers here from the t-test: The first coefficient estimate is equal to the mean of the control samples. The second coefficient estimate is equal to the difference between sample means. The t-value and p-palue of the second coefficient is equal to that of the t-test.
+
+#Let’s consider what lm(expr ~ condition) does. The only parameter we gave was the formula expr ~ condition. This tells the lm() function that expr is the response variable which depends on the predictor variable condition. The model can be written as:
+#yi=β1+β2xi+εi where i is the sample number, yi is expr[i], β1 and β2 are the estimated coefficients and εi are the residuals. xi corresponds to condition[i] but since condition is a factor with two levels (either control or disease), the lm() function will convert xi to either 1 or 0, where control=0 or disease=1.
+```
+
+ 
+```{r,message=FALSE, include=FALSE}
+library(dplyr)
+library(ggplot2)
+
+beta <- fit$coefficients
+
+tibble(y = expr, Phenotype = condition) %>%
+  mutate(x = ifelse(Phenotype=="disease", 1, 0)) %>%
+  ggplot(aes(x = x, y = y, col = Phenotype)) +
+  geom_point(size = 2, alpha = 0.5) +
+  scale_color_manual(values=c("black", "red")) +
+  geom_abline(intercept = beta[1], slope = beta[2], col="blue") +
+  theme_bw()
+
+```
+
+```{r, include=FALSE}
+#The geom_abline() function draws a straight line defined by y=a+bx which corresponds to our fitted model y=β1+β2x
+#Notice that β2 is the slope of the regression line and that there will only be a slope if there is difference in the expression between the control and disease samples.
+
+#We can also interpret β1 as the baseline expression in healthy individuals and β2 as the added expression we get in the disease condition.
+ 
+```
+
+
+```{r, message=FALSE, include=FALSE}
+
+#The model matrix 
+
+model.matrix(fit)
+
+```
+
+<h3> Autistic brain <h3/> 
+
+<h4>**The data**<h4/>
+
+```{r, message=FALSE}
+library(tidyverse)
+library(dplyr)
+library(readr)
+
+samples <- list.files("C:/Users/anekl/OneDrive - Norwegian University of Life Sciences/BIN315/htseq")
+counts <- tibble() 
+for (sample in samples) {
+file <- paste0("htseq/",sample)
+
+c <- read_tsv(file,col_names = c("Gene names","A_AN09730_22","A_AN17777_41","A_AN19511_09","C_AN00142_09","C_AN10028_41","C_AN12240_41"),comment = "__") 
+ if (sample == samples[1]) {counts <- c } else {counts <- cbind(counts, c %>% select(-"Gene names"))}}
+
+dim(counts)
+```
+
+
+
+<H4> **Differential expression between autism and controls in cortex** <H4/>
+
+
+```{r,message=FALSE,include=FALSE}
+dim(counts)
+
+counts.mat <- counts %>% column_to_rownames(var = "Gene names") %>% as.matrix() %>% round()
+
+# Read in RNA-Seq count data and design
+dds <- DESeq2::DESeqDataSetFromMatrix(countData = counts.mat, colData = data.frame(condition = factor(c("autism", "autism", "autism","control", "control", "control"), levels = c("control","autism"))),
+design = ~ condition)
+
+# Names of samples
+colnames(dds)
+```
+
+```{r,message=FALSE,include=FALSE}
+# Conditions of the samples
+dds$condition
+```
+
+
+```{r, message=FALSE, include=FALSE}
+
+#Normalizing the data using variance stabilization
+
+vst <- DESeq2::varianceStabilizingTransformation(dds)
+```
+
+
+```{r, message=FALSE,include=FALSE}
+
+#Differential expression analysis
+
+dds <- DESeq2::DESeq(dds)
+```
+
+
+```{r, message=FALSE,include=FALSE}
+res <- DESeq2::results(dds)
+as.data.frame(res)[1:10,]
+
+#The table shows differential expression results for each gene (e.g. ENSG00000000003). Important columns are the mean expression across all samples (baseMean), the log2 FC between conditions (log2FoldChange), and the significance of the difference in expression as a p-value (pvalue) and an adjusted p-value (padj).
+
+```
+
+
+  
+  
+```{r, message=FALSE}
+
+library(SummarizedExperiment)
+library(dplyr)
+library(ggplot2)
+gene_of_interest <- c("ENSG00000000003")
+
+gene_counts <- assay(vst)[gene_of_interest, ]
+
+# Create a data frame for plotting
+plot_data <- data.frame(Condition = dds$condition,  Expression = gene_counts)
+
+
+ggplot(plot_data, aes(x=Condition, y=Expression, fill = Condition)) + geom_boxplot() + geom_jitter(width = 0.2, shape = 21, color = "black", size = 2, alpha = 0.6) + labs(title = paste("Expression", gene_of_interest), x = "Phenotype", y = "Expression") + scale_fill_manual(values = c("autism" = "pink", "control" = "darkolivegreen2")) + theme_classic() +  theme(plot.title = element_text(hjust = 0.5))
+
+
+```
+
+<H4>**Interpretation of the box plot**<H4/>
+
+Base mean = 299.48 
+
+log2FoldChange = 1.3801904
+
+The boxplot above shows the difference in gene expression between the control group and the autism group. 
+
+The base mean is the overall mean of counts based on all six samples. The base mean for samples showed in the boxplot is 299. This number is relatively high, which shows that the gene is highly expressed in some of the samples. This correspons well to the plot, where the autism group has a high expression in all samples. 
+
+The autism group has clearly higher expression for the gene than the control group. The log2foldchange shows the same thing, since the value is positive. The log2fold value is >1, which means that the gene expression is more than doubled compared to the control group. This seems correct looking at the boxplot. 
+
+Given both the high base mean and the positive fold change, the gene seems to have an biological relevance. The p-value is also quite small, indicating statistical significance. 
+
+
+<h3>Adjusted p-value<h3/> 
+
+Some genes (e.g. ENSG00000000005) does not get an adjusted p-value (NA). This is because DESeq has decided that it cannot reliably compute significance for this gene due to low expression or outliers. This is becauce in situations with very loow counts, there is not enough data to do reliable statistical tests. Low counts can lead to wrong results. 
+
+
+<h4>**Table with sorted p-values**<h4/>
+
+```{r,message=FALSE}
+library(tidyverse)
+res <- DESeq2::results(dds)
+res_table <- as_tibble(res, rownames = "Gene")
+res_0.05 <- res_table %>% filter(!is.na(padj), padj <= 0.05) %>% arrange(padj) 
+
+head(res_0.05,10)
+
+```
+
+<H4>**Questions regarding res and res_0.05**<H4/>
+
+
+**How many genes with expression were tested?**
+
+21591 genes 
+
+
+**What proportion of genes are DEGs?**  
+
+1860 genes are DEGs
+
+
+**How many DEGs are up and how many are down in autism compared to control?**
+
+1000 genes were upregulated in the autism group 
+860 genes were downregulated in the autism group 
+
+
+**How many DEGs do we expect to be false positives given the FDR cutoff?**
+
+The number of false positives = number of DEGs * FDR cutoff
+We can expect 93 FP among the DEGs. 
+
+
+```{r,message=FALSE}
+Upregulated_autism <- res_0.05 %>% filter(log2FoldChange > 0)
+Downregulated_autism <- res_0.05 %>% filter(log2FoldChange < 0)
+
+numb_FP <- 1860*0.05
+print(numb_FP)
+```
+
+
+
+
+<h3>MA-plot<H3/>
+
+```{r, message=FALSE, warning=FALSE}
+library(ggplot2)
+
+res <- res_table %>% mutate(DEG = dplyr::case_when(is.na(padj) ~ "NA", padj < 0.05 ~ "TRUE", padj > 0.05 ~ "FALSE"))
+
+ggplot(res, aes(x = baseMean, y = log2FoldChange, color = DEG)) + geom_point(alpha = 0.6) + scale_x_log10() + coord_cartesian(ylim = c(-10, 10)) + labs(title = "MA PLOT", x = "baseMean", y = "log2FoldChange") + scale_color_manual(values = c("TRUE" = "indianred","FALSE" = "pink2", "NA" = "mediumorchid3")) +  theme_classic() + theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+
+<H4>**Answers to questions**<H4/>
+
+
+**Why aren’t all genes with a log fold change above/below a certain level DEGs (e.g. why is the gene with the highest log fold change red)?** 
+
+
+The genes with the highest log fold (the red ones) are the genes that are differentially expressed. The log2FoldChange has to be at a certain level to give DEGs. The log2FoldChange hides the variance, therefore some of the genes with high log2FoldChange are not DEGs. These genes possibly have a high variance, making them NDE. 
+
+
+
+
+**Why are there so many genes with high log fold change that are not DEGs on the left hand side of the plot?**
+
+
+The genes on the left hand side are the genes with the padj set to NA. These are either genes with very few counts, or outliers. 
+Lowly expressed genes can give both high fluctuations in log2FoldChange and also high variance.
+
+
+
+<H3>Vulcano plot<H3/>
+
+```{r,message=FALSE, warning=FALSE}
+
+ggplot(res, aes(x = log2FoldChange, y = -log10(padj), color = DEG)) + geom_point(alpha = 0.6) + labs(title = "Vulcano Plot", x = "log2FoldChange", y = "-log10(padj)") + scale_color_manual(values = c("TRUE" = "indianred","FALSE" = "pink2")) +  theme_classic() + theme(plot.title = element_text(hjust = 0.55)) + coord_cartesian(xlim = c(-10, 10), ylim = c(0,10))
+```
+
+
+<H4>**Interpretation of the volcano plot**<h4/> 
+
+The plot shows that the NDEGs have a -log(10) padj < 1. The logarithm of less than or equal to 1 is not significant, showing that these are not DEGs. Further up on the Y-axis, the padj-value is shrinking meaning that more of the genes becomes statistically significant. 
+The genes must also have a certain log2FoldChange to become DEGs. 
+
+
+<H3>FC cutoff<H3/>
+
+
+Expression levels double = log2FoldChange >= 1 
+
+Expression levels half = log2FoldChange >= -1
+
+
+```{r,message=FALSE}
+res_0.05FC <- res_0.05 %>% dplyr::filter(log2FoldChange >= 1 | log2FoldChange <= -1)
+head(res_0.05FC,10)
+```
+
+
+```{r,message=FALSE, include=FALSE}
+
+#Save results for later
+
+save(dds, vst, res, res_0.05, res_0.05FC, file = "autism_DEA.RData")
+```
+
+
+<H3>Go enrichment<H3/>
+
+
+```{r, message=FALSE}
+conversion <- read_tsv("Human_ensembl_ids_to_symbols.txt")
+res_0.05FC <- res_0.05FC %>% dplyr::left_join(conversion, by = c("Gene" = "ensembl_id"))
+
+FDR_max <- 0.05
+Fc_up <- 1
+FC_down <- -1 
+
+up_genes <- res_0.05FC %>% filter(padj < FDR_max, log2FoldChange > 1)
+down_genes <- res_0.05FC %>% filter(padj < FDR_max, log2FoldChange < -1)
+
+up_genes <- up_genes %>% select(c("gene_symbol"))
+down_genes <- down_genes %>% select(c("gene_symbol"))
+
+
+write_tsv(up_genes, "upregulatedgenes.tsv")
+write_tsv(down_genes, "downregulatedgenes.tsv")
+```
+
+<H4> **Upregulated genes** <H4/> 
+
+The picture below shows the results from the enrichr web site for upregulated genes. 
+I came to the same conclusion as in the article; the upregulated genes are implicated in immune and inflammatory response.
+
+
+```{r,message=FALSE}
+knitr::include_graphics("C:/Users/anekl/OneDrive - Norwegian University of Life Sciences/BIN315/Upregulated genes.png")
+
+```
+
+<H4> **Downregulated genes** <H4/> 
+
+
+The picture below shows the results from the enrichr web site for downregulated genes. 
+I came to the same conclusion as in the article; the upregulated genes are enriched for gene ontology categories related to synaptic function. 
+
+
+
+```{r,message=FALSE}
+knitr::include_graphics("C:/Users/anekl/OneDrive - Norwegian University of Life Sciences/BIN315/Downregulated genes.png")
+
+```
+
