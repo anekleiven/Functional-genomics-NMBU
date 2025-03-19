@@ -1,0 +1,473 @@
+---
+title: "Week 4: Clustering"
+author: "Ane Kleiven"
+date: "2024-09-26"
+output: html_document
+---
+<H3> Answers to questions <H3/> 
+
+**Question 1: What is the difference between using Euclidean distance and correlation in clustering analysis, and how does scaling affect these differences?**
+
+Euclidian distance gives you the distance between two elements. For example, the distance between two genes. 
+With Euclidian distance you will look at the gene expression in different dimensions (samples). The bigger the distance, the more dissimilar the genes are. Euclidian distance is a dissimilarity measurement. 
+
+Correlation is measuring how the expression of two genes changes over time, not the expression itself. For example: plot gene 1 against gene 2 and see how close the sample values are (points close to the line). 
+In correlation you want the number to be as high as possible, up to 1. This is a similarity measurement. 
+
+The difference between these methods in clustering analysis: 
+The Euclidian distance consider how a gene changes expression across the samples, but it is dependent on the expression level. Example: Two genes that both have their highest expression in the floem, might not be in the same cluster if one gene has very high expression in the floem and the other have lower expression in the floem. In Euclidian distance the data must be scaled. The data is scaled because we are interested in how the genes change, and not whether they are high or low. 
+
+In the R-data “Week 4, heatmat”, the heatmap with scaled data and Euclidian distance, have clear clusters and looks correct according to the article.  
+
+Correlation only looks at the profile of gene expression, it doesn’t care about expression level. In the heat map based on correlation, we focus on where each gene has its highest expression. 
+
+The heat map using correlation looks the same both scaled and unscaled, because the data is independent of measurement units. When using unscaled data in correlation, you need to scale the colors. 
+
+The heat map of scaled data with Euclidian distance and the heat map of correlation looks the same. That is because scaling the Euclidian distance removes the expression level. 
+
+
+**Question 2: Case study: You are given a transcriptomics data set with measurement of gene expression (VST) in a number of individuals (genes x samples/individuals table). You are also given the results of several Chip-seq experiments that associate a number of transcription factors (TFs) with genes (TFs x genes table). You suspect that the individuals suffer from several different diseases possibly caused by mis-regulation of some of the same genes. You assume that the different diseases are caused by up-regulation of genes through up-regulation of TFs or mutations that recruit TFs to new promoters. You would like to find the subset of genes and TFs characteristic to each disease. How would you analyze the data? Explain how the chosen method works and how it would give the desired result.** 
+
+To look at both the gene expression and the transcription factors with genes and find the subset of genes and TF’s characteristic to each disease I would use the Ping-Pong algorithm method. 
+The ping-pong-method does bi-clustering on the two different data sets and can be used to integrate two different data sets into one co-module. The Ping-Pong algorithm is based on the ISA = Iterative Signature Algorithm.
+
+In the Ping-Pong algorithm you need to have one common dimension. In this example the common dimension are the genes. 
+
+The method works like this: 
+You have one expression table with genes and samples (cell lines) and one TF-table with transcription factors (TFs) and genes. You find one subset of genes, one subset of samples and one subset of transcription factors. 
+
+Start with a random gene signature (a predefined set of genes, G) and find the samples where these genes are up-regulated. This is called the cell line signature. 
+
+Find a transcription factor signature of TFs or mutations that causes a response in the cell line signature. 
+
+Refine the cell line signature using the data from the transcription factor data. 
+
+Refine the gene signature using the expression data 
+
+This algorithm is iterative and is repeated until you have a fitted model with upregulated genes that are affected by different transcription factors. 
+
+
+<H3> Loading the data <H3/> 
+
+```{r}
+load("C:/Users/anekl/OneDrive - Norwegian University of Life Sciences/BIN315/AspWood_normalized.RData")
+```
+
+
+```{r,message=FALSE}
+library(dplyr) 
+library(tidyverse)
+
+vst %>% 
+  as.data.frame() %>%                                                           
+  rownames_to_column(var = "Gene") %>% 
+  pivot_longer(-Gene, names_to = "Sample", values_to = "Expression") %>% 
+  mutate(Expressed = Expression > 5,
+         Silent = Expression < 1) %>%
+  group_by(Gene) %>% 
+  summarise(Expressed = sum(Expressed),
+            Silent = sum(Silent)) %>% 
+  filter(Expressed >= 1, Silent >= 1) %>% 
+  pull(Gene) -> regulated.genes
+
+aspwood <- vst[rownames(vst) %in% regulated.genes,]
+
+dim(aspwood)
+```
+```{r, message=FALSE}
+# Plot the expression profile of a random gene
+set.seed(3)   #code for random number generator
+
+aspwood %>% 
+  as.data.frame() %>% 
+  rownames_to_column(var = "Gene") %>% 
+  filter(Gene == sample(regulated.genes, 1)) %>% 
+  pivot_longer(-Gene, names_to = "Sample", values_to = "Expression") %>% 
+  separate(Sample, into = c("Tree", "Sample"), sep = "-") %>% 
+  mutate(Sample = as.numeric(Sample)) %>% 
+  ggplot(aes(x = Sample, y = Expression)) +
+  geom_line(linewidth = 1.5) +
+  theme_bw()
+```
+```{r}
+remove(dds, vst)
+```
+
+**Briefly explain what the code above is doing** 
+
+The first part of the code converts the vst data to a data frame and uses pivot_longer to make a long format of the table where each gene will have a corresponding row for each sample.
+The code then filters out genes that are both expressed (expression > 5) and silent (expression < 1) in different samples. The number of samples that are silent and expressed are summarized, and only genes with at least one sample silent and one sample expressed are filtered. The filtered genes are pulled out from "Gene" and put into a new variable "Regulated.genes". 
+In the last step, a new dataset "aspwood" is made, which only contains the vst data with regulated genes. 
+
+The second part of the code uses the set.seed(3) function to initialize the random number generator. 
+The aspwood data set is used and one gene from the regulated genes is randomly picked. The dataset with the random gene is then converted into a long table, with the gene having a corresponding row for each sample. The sample column is separated into two parts: Tree and Sample. The new sample column is then converted into numeric values. 
+The last part of the code uses the ggplot to make a line plot for the random gene - with gene expression on the y-axis and samples on the x-axis. 
+
+
+<H3> Hierarchical clustering <H3/>
+
+```{r, include=FALSE}
+iris[1:10,]
+```
+```{r, include=FALSE}
+# Save our own version of the iris data
+iris.data <- iris
+
+# Save the species data
+iris.species <- iris.data$Species
+
+# Remove the species information (set as NULL) so that it doesn't influence the clustering
+iris.data$Species <- NULL
+```
+
+```{r, include=FALSE}
+library(usedist)
+
+# Calculate the distance matrix 
+# and show the first 5 rows/columns
+iris.data %>% 
+  dist() %>% 
+  dist_subset(1:5)
+
+```
+<H5> Answers to questions <H5/> 
+
+**What distance function does dist use as default?** 
+
+Dist uses Euclidian distance as default. 
+
+
+
+**Does the dist function calculate distances between rows or columns?** 
+
+The dist function calculates distances between rows. 
+
+
+
+**What hierarchical clustering method does hclust use as default?** 
+
+The default method in R, is the complete linkage method. 
+
+
+```{r, include=FALSE}
+# Perform the hierarchical clustering
+iris.tree <- iris.data %>% 
+  dist() %>% 
+  hclust()
+```
+
+```{r, message=FALSE, include=FALSE}
+
+library(dendextend)
+
+species_colors <- c("setosa" = "lightblue4", "versicolor" = "lightgreen", "virginica" = "lightpink3")
+leaf_colors <- species_colors[iris.species[iris.tree$order]]
+
+iris.tree %>% 
+  as.dendrogram() %>% 
+  set("labels", iris.species[iris.tree$order]) %>% # change labels
+  set("labels_cex", 0.25) %>% # label size
+  set("leaves_pch", 19) %>%  # node point type
+  set("leaves_cex", 0.5) %>%  # node point size
+  set("leaves_col", leaf_colors) %>%  # node point color
+  set("branches_k_color", k=3, value = c("pink3", "coral", "orange")) %>% # branch color
+  plot() 
+```
+
+**Explain the difference between the coloring of the branches and the leaves of the tree? What is your interpretation?**
+
+The colour of the leaves represent the samples that belong to the same class of flowers. 
+The colour of the branches represent the three clusters. Since the samples are reordered in the order they were clustered after, the data shows which samples were clustered together first (are most similar). Leaves that are far from each other, are the most dissimilar. 
+
+```{r, include=FALSE}
+
+#Alternative to the dendrogram above. Based on correlation and the hierarchical clustering method "average" = average linking method
+
+iris.tree.alt <- iris.data %>% 
+  t() %>% 
+  cor() %>%
+  (function(.) {1 - .}) %>% 
+  as.dist() %>% 
+  hclust(method = "average")
+
+iris.tree.alt %>% 
+  as.dendrogram() %>% 
+  set("labels", iris.species[iris.tree.alt$order]) %>% # change labels
+  set("labels_cex", 0.25) %>% # label size
+  set("leaves_pch", 19) %>%  # node point type
+  set("leaves_cex", 0.5) %>%  # node point size
+  set("leaves_col", iris.species[iris.tree.alt$order]) %>%  # node point color
+  set("branches_k_color", k=3) %>% # branch color
+  plot()
+```
+<H3> Hierarchical clustering of the AspWood data <H3/> 
+
+```{r}
+
+#stages of tree formation 
+
+aspwood.stages <- factor(c(rep("PhloemZone", 5), rep("ExpansionZone", 5), rep("SecondaryCellWallZone", 9), rep("LignificationZone", 6)))
+
+```
+
+**Perform hierarchical clustering on the normalized expression data and draw the tree**
+
+```{r, message=FALSE}
+scaled_data <- t(scale(t(aspwood), center = TRUE, scale = TRUE))
+
+aspwood.tree <- scaled_data %>% t() %>% dist() %>% hclust %>% as.dendrogram() %>% reorder(1:25, agglo.FUN = mean) %>% as.hclust() %>% as.dendrogram() %>% 
+set("labels_cex", 0.25) %>%  
+set("leaves_pch", 19) %>% 
+set("leaves_cex", 0.5) %>% 
+set("leaves_col", leaf_colors) %>% 
+set("branches_k_color", k = 4, value = c("coral", "lightblue3", "orange3", "green4")) %>% 
+plot()
+
+```
+
+**What is your biological interpretation of the tree?** 
+The dendrogram shows that the samples are clustered together in four different clusters. The clusters match the four different stages in tree formation. This indicates that samples have different expression in different stages of the tree formation. The Aspwood paper shows similar results. 
+
+
+<H3> Heatmaps <H3/> 
+
+```{r, include=FALSE,warning=FALSE, message=FALSE}
+# Install and load pheatmap package
+library(pheatmap)
+
+pheatmap(as.matrix(iris.data), 
+         cluster_rows = iris.tree,
+         cluster_cols = TRUE, 
+         scale = "column", 
+         labels_row = as.character(iris.species),
+         fontsize_row = 3)
+```
+```{r, include=FALSE}
+# Create an annotation data.frame with the same row names as 
+# the input data (iris.data)
+rownames(iris.data) <- 1:150 # OBS: iris did not have row names
+annot.row <- data.frame(row.names = rownames(iris.data), Species = iris.species)
+
+pheatmap(as.matrix(iris.data), 
+         cluster_rows = iris.tree.alt,
+         cluster_cols = TRUE, 
+         scale = "column", 
+         show_rownames = FALSE, 
+         annotation_row = annot.row)
+```
+
+<H4> Heatmap of the AspWood gene expression data <H4/> 
+
+
+```{r}
+
+scaled_data <- t(scale(t(aspwood), center = TRUE, scale = TRUE))      #scale the data 
+annot_col <- data.frame(row.names = colnames(scaled_data), Stages = aspwood.stages)
+
+
+#apply distance and clustering method to the columns
+asp.treeC <- scaled_data %>% t() %>% dist(method = "euclidian") %>% hclust(method = "ward.D2") %>% as.dendrogram() %>% reorder(1:25, agglo.FUN = mean) %>% as.hclust()  
+
+
+#apply distance and clustering method to the rows 
+asp.treeR <- as.dist(1-cor(t(scaled_data), method = "pearson")) %>% hclust(method = "ward.D2")
+
+
+#heatmap using pheatmap function. Scale = none since the scaled_data is used. 
+pheatmap(as.matrix(scaled_data), 
+         cluster_rows = asp.treeR,
+         cluster_cols = asp.treeC, 
+         scale = "none",
+         labels_row = as.character(aspwood.stages),
+         fontsize_row = 3, 
+         show_rownames = FALSE, 
+         annotation_col = annot_col,
+         color = colorRampPalette(c("blue", "white", "red"))(100))
+```
+<H4> Answers to questions <H4/> 
+
+**Compare your plot with figure 1 in the Aspwood-paper. How well do they agree?** 
+
+My heatmap shows that the samples have different gene expression in different stages of tree formation. 
+This is also the case in the Aspwood paper. 
+For the initial stage "Phloem", sample 1-5 have their highest gene expression in the middle cluster of genes. 
+For the expansion zone, sample 6-10 all have their highest gene expression in the upper cluster of genes. 
+For the secondary cell wall zone, sample 11-19 have their highest gene expression in the gene cluster far down. 
+For the lignification zone, sample 20-25 all have their highest gene expression in the bottom gene cluster. 
+This shows that there is a clear relationship between different genes and their function in different stages of tree formation. 
+
+The heatmap in the paper also shows that different set of genes are highly expressed in different stages of tree formation. The clusters are organized a bit different in the heatmap from Aspwood (they cut the dendrogram into a specifid number of clusters and subclusters), which can explain why the heatmaps looks a bit different. 
+
+
+**What happens to the heatmap if you skip scale = "row" in the pheatmap-function? Explain**
+
+If I skip scale = "row" (on unscaled data), the whole heatmap will turn blue. The correlation data is not affected by scaling, but you need to scale the colours to visualize the differences in gene expression. For correlation the data is independent of measurement units.
+
+In my first heatmap, there is no difference when changing scale = "row" to scale = "none", that is because the data is prescaled. In the heatmap below, I have used the unscaled data and the scale = "none". This shows what happens when the colours are unscaled. 
+
+
+```{r, message=FALSE, warning=FALSE}
+library(ggplots)
+
+asp.treeC <- aspwood %>% t() %>% dist(method = "euclidian") %>% hclust(method = "ward.D2") %>% as.dendrogram() %>% reorder(1:25, agglo.FUN = mean) %>% as.hclust()
+asp.treeR <- as.dist(1-cor(t(aspwood), method = "pearson")) %>% hclust(method = "ward.D2")
+
+pheatmap(as.matrix(aspwood), 
+         cluster_rows = asp.treeR,
+         cluster_cols = asp.treeC, 
+         scale = "none",
+         labels_row = as.character(aspwood.stages),
+         fontsize_row = 3, 
+         show_rownames = FALSE, 
+         annotation_col = annot_col,
+         color = colorRampPalette(c("blue", "white", "red"))(100)) 
+```
+
+<H3> K-means clustering <H3/> 
+
+```{r, include=FALSE}
+iris.kmeans <- kmeans(iris.data, 3)
+```
+
+```{r, include=FALSE}
+table(iris.kmeans$cluster, iris.species, dnn = c("Cluster", "Class"))
+```
+
+```{r, include=FALSE}
+iris.kmeans$centers
+```
+
+```{r, include=FALSE}
+iris.data %>% 
+  ggplot(aes(x = Sepal.Width, y = Sepal.Length, 
+             col = as.factor(iris.kmeans$cluster), shape = iris.species)) +
+  scale_color_manual(values = c("darkgreen", "blue", "red")) +
+  labs(col = "Cluster", shape = "Species") +
+  geom_point() +
+  annotate("point", x = iris.kmeans$centers[1,2], y = iris.kmeans$centers[1,1], 
+           col="darkgreen", size = 2, shape = 8) +
+  annotate("point", x = iris.kmeans$centers[2,2], y = iris.kmeans$centers[2,1], 
+           col="blue", size = 2, shape = 8) +
+  annotate("point", x = iris.kmeans$centers[3,2], y = iris.kmeans$centers[3,1], 
+           col="red", size = 2, shape = 8)
+
+```
+
+<H4> k-means clustering of the AspWood gene expression data <H4/>
+
+Since the Aspwood table contains samples as rows and genes as columns, i need to cluster columns. 
+K is set to four, since the tree formation has 4 stages (and the samples naturally divide into 4 clusters). 
+
+```{r}
+#k clustering of the scaled aspwood data. The data needs to be transposed, since kmeans uses rows as default 
+aspwood.kmeans <- kmeans(t(scaled_data), centers = 4)
+
+```
+
+```{r}
+
+#table of the kmean clusters 
+table(aspwood.kmeans$cluster, aspwood.stages, dnn = c("Cluster", "Class"))
+
+```
+
+**How well does the k-means clustering compare with the hierarchical clustering?** 
+In the hierarchical clustering, the samples are assigned like this (the dendrogram is sorted from sample 1-25)
+Phloem: sample 1-5
+Expansion zone: sample 6-10 
+Secondary cell wall zone: sample 11-19
+Lignification zone: sample 20-25
+The code from aspwood.stages is shown below. 
+In the hierarchical clustering, every stage in tree formation is assigned to its own cluster. 
+
+In the K-mean clustering, two of the clusters contain samples from different stages. The samples are not assigned as well within tree stages as in the hierarchical clustering. There is more of a mix in clusters and tree stages. 
+
+
+```{r}
+print(aspwood.stages)
+```
+
+<H3> Principal Component Analysis (PCA) <H3/>
+
+```{r, include=FALSE}
+# PCA of iris data
+iris.pca <- prcomp(iris.data)
+
+# Summary of components
+summary(iris.pca)
+```
+
+
+```{r, include=FALSE}
+iris.pca$x %>% 
+  ggplot(aes(PC1, PC2, col = iris.species)) +
+  geom_point()
+```
+
+
+```{r, include=FALSE}
+iris.pca$rotation
+```
+
+<H4> PCA on the AspWood gene expression data <H4/> 
+
+**Run PCA on the AspWood gene expression data:** 
+
+```{r}
+
+aspwood.pca <- aspwood.pca <- prcomp(t(scaled_data))    #transpose the data so the samples are in rows
+
+
+summary(aspwood.pca)
+
+```
+
+**Create a scatterplot with the first two components. Color the points by the stages of wood formation as before**
+
+```{r}
+
+aspwood.pca$x %>% ggplot(aes(PC1, PC2, col = aspwood.stages)) + geom_point() + labs(title = "PCA of Aspwood Data", x = "PC1", y = "PC2") + theme(plot.title = element_text(hjust = 0.5)) + scale_color_manual(values = c("PhloemZone" = "coral2", 
+"ExpansionZone" = "red", "SecondaryCellWallZone" = "orange","LignificationZone" = "lightblue4"))
+
+```
+
+```{r}
+
+#Find the most influental genes in PC1 and PC2: 
+PC1_PC2 <- aspwood.pca$rotation[, c("PC1","PC2")]
+
+
+max_pc1 <- rownames(PC1_PC2)[which.max(abs(PC1_PC2[, "PC1"]))]
+max_pc2 <- rownames(PC1_PC2)[which.max(abs(PC1_PC2[, "PC2"]))]
+
+print(max_pc1)
+print(max_pc2)
+
+```
+
+```{r}
+#Create a scatterplot of the most influental gene in PC1 and PC2: 
+
+scaled_data %>% t() %>% 
+  ggplot(aes(x = Potra2n14c26603, y = Potra2n4c9313, 
+             col = as.factor(aspwood.kmeans$cluster), shape = aspwood.stages)) +
+  scale_color_manual(values = c("deeppink", "olivedrab3", "cornflowerblue","orange")) +
+  labs(col = "Cluster", shape = "Species") +
+  geom_point() +
+  annotate("point", x = aspwood.kmeans$centers[1,2], y = aspwood.kmeans$centers[1,1], 
+           col="deeppink", size = 2, shape = 8) +
+  annotate("point", x = aspwood.kmeans$centers[2,2], y = aspwood.kmeans$centers[2,1], 
+           col="olivedrab3", size = 2, shape = 8) +
+  annotate("point", x = aspwood.kmeans$centers[3,2], y = aspwood.kmeans$centers[3,1], 
+           col="cornflowerblue", size = 2, shape = 8) + 
+  annotate("point", x = aspwood.kmeans$centers[4,2], y = aspwood.kmeans$centers[4,1], 
+           col="orange", size = 2, shape = 8)
+```
+
+**How large proportion of the variance do the first two components explain?**
+
+PC1 and PC2 explains 43% and 23% of the total variance. In total, 66% of the data is explained by PC1 and PC2. 
+
+
+
+
